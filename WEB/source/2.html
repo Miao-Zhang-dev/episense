@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>传感器数据管理</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f1f5f5;color:#203238;font:15px system-ui,"Microsoft YaHei",sans-serif}
+    header{height:58px;background:#fff;border-bottom:1px solid #d9e2e3;display:flex;align-items:center;justify-content:space-between;padding:0 max(20px,calc((100vw - 1100px)/2))}
+    header strong{font-size:18px}header button,.primary,.quiet{font:inherit;border:1px solid #c6d4d5;border-radius:4px;background:#fff;padding:8px 12px;cursor:pointer;color:#31464b}
+    main{max-width:1100px;margin:28px auto;padding:0 20px}.toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.toolbar h1{font-size:21px;margin:0}
+    input{font:inherit;padding:9px 10px;border:1px solid #cbd7d9;border-radius:4px;background:white}.toolbar input{width:min(320px,55vw)}
+    .primary{background:#087f72;border-color:#087f72;color:white}.table-wrap{overflow:auto;background:#fff;border:1px solid #d6e0e1;border-radius:6px}
+    table{border-collapse:collapse;width:100%;min-width:700px;text-align:left}th,td{padding:12px 14px;border-bottom:1px solid #e5ebec}th{background:#f8fafa;font-size:13px;color:#61747a;font-weight:600}tbody tr:last-child td{border-bottom:0}.actions{display:flex;gap:8px}.actions button{padding:5px 9px}
+    .below{margin-top:20px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:20px}.editor{border-top:1px solid #d6e0e1;padding-top:16px}.editor h2{font-size:16px;margin:0 0 12px}.fields{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px}.fields label{font-size:13px;color:#61747a}.fields input{display:block;width:100%;margin-top:5px}.editor button{margin-top:12px}.notice{min-height:22px;color:#a43e32;margin:10px 0 0}.empty{color:#6c7d82;text-align:center;padding:24px}
+    @media(max-width:700px){.below{grid-template-columns:1fr}.fields{grid-template-columns:repeat(2,minmax(120px,1fr))}.toolbar{align-items:flex-start;flex-direction:column}.toolbar input{width:100%}}
+  </style>
+</head>
+<body>
+  <header><strong>传感器数据管理</strong><button id="logout" type="button">退出登录</button></header>
+  <main>
+    <div class="toolbar"><h1>传感器</h1><input id="search" type="search" placeholder="按名称或位置筛选" aria-label="筛选传感器"></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>ID</th><th>名称</th><th>位置</th><th>温度（°C）</th><th>湿度（%）</th><th>更新时间</th><th>操作</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <div class="below">
+      <form class="editor" id="sensor-form">
+        <h2 id="form-title">新增传感器数据</h2>
+        <div class="fields">
+          <label>名称<input name="name" maxlength="80" required></label>
+          <label>位置<input name="location" maxlength="120" required></label>
+          <label>温度（°C）<input name="temperature" type="number" min="-100" max="200" step="0.1" required></label>
+          <label>湿度（%）<input name="humidity" type="number" min="0" max="100" step="0.1" required></label>
+        </div>
+        <button class="primary" type="submit">保存数据</button>
+        <button class="quiet" id="cancel-edit" type="button" hidden>取消编辑</button>
+        <p class="notice" id="notice" role="status"></p>
+      </form>
+      <button class="quiet" id="refresh" type="button">刷新数据</button>
+    </div>
+  </main>
+  <script>
+    const rows=document.querySelector('#rows'), form=document.querySelector('#sensor-form'), notice=document.querySelector('#notice');
+    let editingId=null, timer;
+    async function api(url,options={}) {
+      const response=await fetch(url,{...options,headers:{...(options.body?{'Content-Type':'application/x-www-form-urlencoded'}:{}),...options.headers}});
+      const result=await response.json();
+      if(response.status===401){location.href='/';throw new Error('登录状态已失效');}
+      if(!response.ok) throw new Error(result.error||'请求失败');
+      return result;
+    }
+    function cell(row,text){const td=document.createElement('td');td.textContent=text;row.append(td);return td;}
+    async function load(){
+      try {
+        const data=await api('/api/sensors?q='+encodeURIComponent(document.querySelector('#search').value));
+        rows.replaceChildren();
+        if(!data.length){const tr=document.createElement('tr'),td=cell(tr,'暂无传感器数据');td.colSpan=7;td.className='empty';rows.append(tr);return;}
+        for(const sensor of data){
+          const tr=document.createElement('tr');cell(tr,sensor.id);cell(tr,sensor.name);cell(tr,sensor.location);cell(tr,sensor.temperature);cell(tr,sensor.humidity);cell(tr,sensor.updated_at);
+          const td=document.createElement('td'), actions=document.createElement('div');actions.className='actions';
+          const edit=document.createElement('button');edit.className='quiet';edit.textContent='编辑';edit.onclick=()=>beginEdit(sensor);
+          const remove=document.createElement('button');remove.className='quiet';remove.textContent='删除';remove.onclick=()=>removeSensor(sensor.id);
+          actions.append(edit,remove);td.append(actions);tr.append(td);rows.append(tr);
+        }
+      } catch(error){notice.textContent=error.message;}
+    }
+    function beginEdit(sensor){
+      editingId=sensor.id;form.elements.name.value=sensor.name;form.elements.location.value=sensor.location;
+      form.elements.temperature.value=sensor.temperature;form.elements.humidity.value=sensor.humidity;
+      document.querySelector('#form-title').textContent='编辑传感器数据';document.querySelector('#cancel-edit').hidden=false;
+      form.scrollIntoView({behavior:'smooth',block:'center'});
+    }
+    function resetForm(){editingId=null;form.reset();document.querySelector('#form-title').textContent='新增传感器数据';document.querySelector('#cancel-edit').hidden=true;}
+    async function removeSensor(id){if(!confirm('确定删除这条传感器记录吗？'))return;try{await api('/api/sensors?id='+id,{method:'DELETE'});notice.textContent='记录已删除';load();}catch(error){notice.textContent=error.message;}}
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();notice.textContent='';
+      try{const body=new URLSearchParams(new FormData(form));const url='/api/sensors'+(editingId?'?id='+editingId:'');await api(url,{method:editingId?'PUT':'POST',body});resetForm();notice.textContent='数据已保存';load();}
+      catch(error){notice.textContent=error.message;}
+    });
+    document.querySelector('#cancel-edit').onclick=resetForm;
+    document.querySelector('#refresh').onclick=load;
+    document.querySelector('#search').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(load,250);});
+    document.querySelector('#logout').onclick=async()=>{try{await api('/api/auth/logout',{method:'POST'});}finally{location.href='/';}};
+    load();
+  </script>
+</body>
+</html>
